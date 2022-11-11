@@ -4,6 +4,7 @@ import requests
 import psycopg2
 import re
 import datetime
+from pprint import pprint
 from tqdm import tqdm
 import schedule
 
@@ -122,27 +123,7 @@ class ValidateAccount():
             return E
 
 
-def request_params(params_index: dict, line_table: tuple) -> dict:
-    return_params = {}
-    for key, val in params_index.items():
-        if line_table[1] == 1 and key in ['client_secret_performance',
-                                          'client_id_performance', 'client_id_api', 'api_key']:
-            if line_table[val] is not None and line_table[val] != '':
-                param = {key: line_table[val]}
-                return_params = {**return_params, **param}
-        elif line_table[1] == 2 and key in ['client_id_api', 'api_key']:
-            if line_table[val] is not None and line_table[val] != '':
-                param = {key: line_table[val]}
-                return_params = {**return_params, **param}
-        elif line_table[1] == 3 and key in ['client_id_api', 'api_key']:
-            if line_table[val] is not None and line_table[val] != '':
-                param = {key: line_table[val]}
-                return_params = {**return_params, **param}
-    if return_params != {}:
-        return return_params
-
-
-def set_account_status():
+def connection():
     conn = psycopg2.connect(
         host='rc1b-itt1uqz8cxhs0c3d.mdb.yandexcloud.net',
         port='6432',
@@ -152,69 +133,111 @@ def set_account_status():
         target_session_attrs='read-write',
         sslmode='verify-full'
     )
-    select = conn.cursor()
-    select.execute("SELECT * FROM account_list;")
-    lines_table = select.fetchall()
-    param_index = {
-        'client_secret_performance': 2,
-        'client_id_performance': 4,
-        'client_id_api': 5,
-        'api_key': 6,
-    }
-    mp_validate = ValidateAccount()
-    for line in tqdm(lines_table):
-        params_request = request_params(param_index, line)
-        if line[1] == 1 and params_request is not None:  # Ozon
-            if 'client_secret_performance' in params_request.keys() \
-                    and 'api_key' in params_request.keys():
-                mp_oz_per = mp_validate.validate_ozon_performance(params_request['client_secret_performance'],
-                                                                  params_request['client_id_performance'])
-                mp_oz = mp_validate.validate_ozon(params_request['client_id_api'], params_request['api_key'])
-                line_write = f"UPDATE account_list SET status_1 = '{mp_oz}', status_2 = '{mp_oz_per}' WHERE id = {line[0]};"
-                select.execute(line_write)
+    return conn
+
+
+def get_account_id(conn):
+    with conn:
+        with conn.cursor() as select:
+            select.execute(
+                "SELECT * FROM account_list WHERE mp_id = 1 "
+                "OR mp_id = 2 OR mp_id = 3 OR mp_id = 15 OR "
+                "mp_id = 14;"
+            )
+            lines_table = select.fetchall()
+            accounts_list = {1: [], 2: [], 3: [], 14: [], 15: []}
+            for line in lines_table:
+                if line[1] == 1:
+                    accounts_list[1].append(line[0])
+                if line[1] == 2:
+                    accounts_list[2].append(line[0])
+                if line[1] == 3:
+                    accounts_list[3].append(line[0])
+                if line[1] == 14:
+                    accounts_list[14].append(line[0])
+                if line[1] == 15:
+                    accounts_list[15].append(line[0])
+            return accounts_list
+
+
+def data_collection(accounts_list: list, conn, accounts_data: dict, mp_id: int):
+    with conn:
+        with conn.cursor() as select:
+            for key, val in accounts_list.items():
+                if key == mp_id:
+                    for account_id in val:
+                        select.execute(
+                            f"SELECT sa.attribute_name, asd.attribute_value " 
+                            f"FROM account_list al join account_service_data asd " 
+                            f"on al.id = asd.account_id join  service_attr sa on "
+                            f"asd.attribute_id = sa.id where al.id = {account_id};"
+                        )
+                        list_data = select.fetchall()
+                        if len(list_data) != 0:
+                            account_data = {}
+                            for tuple_data in list_data:
+                                temporary_dict_data = {tuple_data[0]: tuple_data[1]}
+                                account_data = {**account_data, **temporary_dict_data}
+                            accounts_data[mp_id] = {**accounts_data[mp_id], **{account_id: account_data}}
+            return accounts_data
+
+
+def status_update(conn, status, id):
+    try:
+        with conn:
+            with conn.cursor() as select:
+                select.execute(
+                    f"UPDATE account_list SET status_1 = '{status}' WHERE id = {id};"
+                )
                 conn.commit()
-            elif 'api_key' not in params_request.keys():
-                mp_oz_per = mp_validate.validate_ozon_performance(params_request['client_secret_performance'],
-                                                                  params_request['client_id_performance'])
-                line_write = f"UPDATE account_list SET status_2 = '{mp_oz_per}' WHERE id = {line[0]};"
-                select.execute(line_write)
-                conn.commit()
-            elif 'client_secret_performance' not in params_request.keys():
-                mp_oz = mp_validate.validate_ozon(params_request['client_id_api'], params_request['api_key'])
-                line_write = f"UPDATE account_list SET status_1 = '{mp_oz}' WHERE id = {line[0]};"
-                select.execute(line_write)
-                conn.commit()
-        elif line[1] == 2 and params_request is not None:  # Yandex
-            mp_ya = mp_validate.validate_yandex(params_request['client_id_api'],
-                                                params_request['api_key'])
-            line_write = f"UPDATE account_list SET status_1 = '{mp_ya}' WHERE id = {line[0]};"
-            select.execute(line_write)
-            conn.commit()
-        elif line[1] == 3 and params_request is not None:  # Wildberries
-            if 'client_id_api' in params_request.keys() and 'api_key' in params_request.keys():
-                mp_wb_stat = mp_validate.validate_wbstatistic(params_request['api_key'])
-                mp_wb = mp_validate.validate_wildberries(params_request['client_id_api'])
-                line_write = f"UPDATE account_list SET status_1 = '{mp_wb}', status_2 = '{mp_wb_stat}' WHERE id = {line[0]};"
-                select.execute(line_write)
-                conn.commit()
-            elif 'api_key' in params_request.keys():
-                mp_wb_stat = mp_validate.validate_wbstatistic(params_request['api_key'])
-                line_write = f"UPDATE account_list SET status_2 = '{mp_wb_stat}' WHERE id = {line[0]};"
-                select.execute(line_write)
-                conn.commit()
-            elif 'client_id_api' in params_request.keys():
-                mp_wb = mp_validate.validate_wildberries(params_request['client_id_api'])
-                line_write = f"UPDATE account_list SET status_1 = '{mp_wb}' WHERE id = {line[0]};"
-                select.execute(line_write)
-                conn.commit()
-        elif params_request is None:
-            line_write = f"UPDATE account_list SET status_1 = 'Disactive', status_2 = 'Disactive' WHERE id = {line[0]};"
-            select.execute(line_write)
-            conn.commit()
-    conn.close()
+    except Exception as E:
+        print(f"Exception in sent to DB: {E}")
+
+
+def main():
+    accounts_data = {1: {}, 2: {}, 3: {}, 14: {}, 15: {}}
+    conn = connection()
+    account_list = get_account_id(conn)  # Запуск не по расписанию
+    for key in accounts_data.keys():
+        res = data_collection(account_list, conn, accounts_data, key)
+        accounts_data = {**accounts_data, **res}
+    class_instance = ValidateAccount()
+    for key, val in accounts_data[1].items():
+        if ('client_id_api' and 'api_key') in val.keys():
+            account_status = class_instance.validate_ozon(val['client_id_api'], val['api_key'])
+            status_update(conn, account_status, key)
+        else:
+            status_update(conn, 'Disactive', key)
+    for key, val in accounts_data[14].items():
+        if ("client_id_performance" and "client_secret_performance") in val.keys():
+            account_status = class_instance.validate_ozon_performance(
+                val['client_secret_performance'], val['client_id_performance'])
+            status_update(conn, account_status, key)
+        else:
+            status_update(conn, 'Disactive', key)
+    for key, val in accounts_data[2].items():
+        if ("api_key" and "client_id_api") in val.keys():
+            account_status = class_instance.validate_yandex(
+                val['client_id_api'], val['api_key'])
+            status_update(conn, account_status, key)
+        else:
+            status_update(conn, 'Disactive', key)
+    for key, val in accounts_data[3].items():
+        if "client_id_api" in val.keys():
+            account_status = class_instance.validate_wildberries(
+                val['client_id_api'])
+            status_update(conn, account_status, key)
+        else:
+            status_update(conn, 'Disactive', key)
+    for key, val in accounts_data[15].items():
+        if "api_key" in val.keys():
+            account_status = class_instance.validate_wbstatistic(
+                val['api_key'])
+            print(key, account_status)
+            status_update(conn, account_status, key)
+        else:
+            status_update(conn, 'Disactive', key)
 
 
 if __name__ == '__main__':
-    set_account_status()  # Запуск не по расписанию
-    # schedule.every().day.at('7:00').do(set_account_status)  # Запуск каждый день в 7:00 утра
-
+    main()
