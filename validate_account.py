@@ -4,6 +4,7 @@ import requests
 import psycopg2
 import re
 import datetime
+import json
 from pprint import pprint
 from tqdm import tqdm
 import schedule
@@ -167,8 +168,8 @@ def data_collection(accounts_list: list, conn, accounts_data: dict, mp_id: int):
                 if key == mp_id:
                     for account_id in val:
                         select.execute(
-                            f"SELECT sa.attribute_name, asd.attribute_value " 
-                            f"FROM account_list al join account_service_data asd " 
+                            f"SELECT sa.attribute_name, asd.attribute_value "
+                            f"FROM account_list al join account_service_data asd "
                             f"on al.id = asd.account_id join  service_attr sa on "
                             f"asd.attribute_id = sa.id where al.id = {account_id};"
                         )
@@ -180,6 +181,46 @@ def data_collection(accounts_list: list, conn, accounts_data: dict, mp_id: int):
                                 account_data = {**account_data, **temporary_dict_data}
                             accounts_data[mp_id] = {**accounts_data[mp_id], **{account_id: account_data}}
             return accounts_data
+
+
+def logging(status, id, mp_id):
+    if not os.path.isfile('validate_logging.json'):
+        with open('validate_logging.json', 'w', encoding='utf-8') as file:
+            logs = [{
+                "status_change": datetime.date.today().strftime('%Y-%m-%d'),
+                "last_change": datetime.date.today().strftime('%Y-%m-%d'),
+                "current_status": status,
+                "account_id": id,
+                "mp_id": mp_id,
+                "status_delete": False
+            }]
+            json.dump(logs, file, indent=4)
+    else:
+        with open('validate_logging.json', 'r', encoding='utf-8') as read_file:
+            read_logs = json.load(read_file)
+            for log in read_logs:
+                if id == log['account_id']:
+                    log['last_change'] = datetime.date.today().strftime('%Y-%m-%d')
+                    if log['current_status'] != status:
+                        log['current_status'] = status
+                        log['status_change'] = datetime.date.today().strftime('%Y-%m-%d')
+                    date_change = datetime.datetime.strptime(log['status_change'], '%Y-%m-%d')
+                    # The gap where status is deactivated 6 months
+                    date_delete = date_change - datetime.timedelta(weeks=24)
+                    if date_delete > date_change and log['current_status'] == 'Deactive':
+                        log['status_delete'] = True
+                else:
+                    logs = {
+                        "status_change": datetime.date.today().strftime('%Y-%m-%d'),
+                        "last_change": datetime.date.today().strftime('%Y-%m-%d'),
+                        "current_status": status,
+                        "account_id": id,
+                        "mp_id": mp_id,
+                        "status_delete": False
+                    }
+                    read_logs.append(logs)
+            with open('validate_logging.json', 'w', encoding='utf-8') as write_file:
+                json.dump(read_logs, write_file, indent=4)
 
 
 def status_update(conn, status, id):
@@ -205,38 +246,47 @@ def main():
     for key, val in accounts_data[1].items():
         if ('client_id_api' and 'api_key') in val.keys():
             account_status = class_instance.validate_ozon(val['client_id_api'], val['api_key'])
+            logging(account_status, key, 1)
             status_update(conn, account_status, key)
         else:
             status_update(conn, 'Disactive', key)
+            logging('Disactive', key, 1)
     for key, val in accounts_data[14].items():
         if ("client_id_performance" and "client_secret_performance") in val.keys():
             account_status = class_instance.validate_ozon_performance(
                 val['client_secret_performance'], val['client_id_performance'])
+            logging(account_status, key, 14)
             status_update(conn, account_status, key)
         else:
             status_update(conn, 'Disactive', key)
+            logging('Disactive', key, 14)
     for key, val in accounts_data[2].items():
         if ("api_key" and "client_id_api") in val.keys():
             account_status = class_instance.validate_yandex(
                 val['client_id_api'], val['api_key'])
+            logging(account_status, key, 2)
             status_update(conn, account_status, key)
         else:
             status_update(conn, 'Disactive', key)
+            logging('Disactive', key, 2)
     for key, val in accounts_data[3].items():
         if "client_id_api" in val.keys():
             account_status = class_instance.validate_wildberries(
                 val['client_id_api'])
+            logging(account_status, key, 3)
             status_update(conn, account_status, key)
         else:
             status_update(conn, 'Disactive', key)
+            logging('Disactive', key, 3)
     for key, val in accounts_data[15].items():
         if "api_key" in val.keys():
             account_status = class_instance.validate_wbstatistic(
                 val['api_key'])
-            print(key, account_status)
+            logging(account_status, key, 15)
             status_update(conn, account_status, key)
         else:
             status_update(conn, 'Disactive', key)
+            logging('Disactive', key, 15)
 
 
 if __name__ == '__main__':
