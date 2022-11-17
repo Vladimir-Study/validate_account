@@ -198,6 +198,7 @@ def logging(status, id, mp_id):
     else:
         with open('validate_logging.json', 'r', encoding='utf-8') as read_file:
             read_logs = json.load(read_file)
+            flag = False
             for log in read_logs:
                 if id == log['account_id']:
                     log['last_change'] = datetime.date.today().strftime('%Y-%m-%d')
@@ -209,16 +210,17 @@ def logging(status, id, mp_id):
                     date_delete = date_change - datetime.timedelta(weeks=24)
                     if date_delete > date_change and log['current_status'] == 'Deactive':
                         log['status_delete'] = True
-                else:
-                    logs = {
-                        "status_change": datetime.date.today().strftime('%Y-%m-%d'),
-                        "last_change": datetime.date.today().strftime('%Y-%m-%d'),
-                        "current_status": status,
-                        "account_id": id,
-                        "mp_id": mp_id,
-                        "status_delete": False
-                    }
-                    read_logs.append(logs)
+                    flag = True
+            if not flag:
+                logs = {
+                    "status_change": datetime.date.today().strftime('%Y-%m-%d'),
+                    "last_change": datetime.date.today().strftime('%Y-%m-%d'),
+                    "current_status": status,
+                    "account_id": id,
+                    "mp_id": mp_id,
+                    "status_delete": False
+                }
+                read_logs.append(logs)
             with open('validate_logging.json', 'w', encoding='utf-8') as write_file:
                 json.dump(read_logs, write_file, indent=4)
 
